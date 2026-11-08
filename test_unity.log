@@ -1,0 +1,28 @@
+VBCSCompilerServerWatchdog: watching VBCSCompiler (PID 16932)
+[Licensing::Module] Trying to connect to existing licensing client channel...
+Built from '6000.3/staging' branch; Version is '6000.3.26f1 (de8167e7440c) revision 14582119'; Using compiler version '194234433'; Build Type 'Release'
+[Licensing::IpcConnector] Connection to channel LicenseClient-Usuario refused
+OS: 'Windows 11  (10.0.26300) Core' Language: 'es' Physical Memory: 15706 MB
+BatchMode: 1, IsHumanControllingUs: 0, StartBugReporterOnCrash: 0, Is64bit: 1
+System  architecture: x64
+Process architecture: x64
+Date: 2026-11-05T16:27:52Z
+[Licensing::Module] Successfully launched the LicensingClient (PId: 20244)
+Assertion failed on expression: 'SUCCEEDED(hr)'
+Assertion failed on expression: 'wmiOpened'
+Assertion failed on expression: 'ERROR_SUCCESS == status'
+
+COMMAND LINE ARGUMENTS:
+C:\Program Files\Unity\Hub\Editor\6000.3.26f1\Editor\Unity.exe
+-nographics
+-batchmode
+-quit
+-projectPath
+.
+-executeMethod
+PruebasCombate2D.Ejecutar
+-logFile
+test_unity.log
+Successfully changed project path to: C:/Users/Usuario/Documents/Tetris tutorial Blog/Plataformas 2D
+C:/Users/Usuario/Documents/Tetris tutorial Blog/Plataformas 2D
+Exiting without the bug reporter. Application will terminate with return code 1
