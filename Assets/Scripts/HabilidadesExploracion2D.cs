@@ -5,7 +5,9 @@ using UnityEngine;
 public enum HabilidadExploracion2D
 {
     Dash,
-    DescargaPresion
+    DescargaPresion,
+    DobleSalto,
+    EscaladaParedes
 }
 
 [DisallowMultipleComponent]

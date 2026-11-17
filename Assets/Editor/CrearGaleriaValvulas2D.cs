@@ -625,8 +625,8 @@ public static class CrearGaleriaValvulas2D
         objetoCamara.tag = "MainCamera";
 
         CamaraZona2D seguidor = objetoCamara.AddComponent<CamaraZona2D>();
-        seguidor.AsignarZona(zona);
-        seguidor.AsignarObjetivo(objetivo);
+        seguidor.Configurar(zona,objetivo);
+       // seguidor.AsignarObjetivo(objetivo);
         return camara;
     }
 

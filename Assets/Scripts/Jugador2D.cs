@@ -1,6 +1,9 @@
 using System.Collections.Generic;
+using System.Collections; // <--- Necesario para las corrutinas
 using UnityEngine;
 using UnityEngine.InputSystem;
+
+
 
 public enum DireccionAtaque2D
 {
@@ -34,6 +37,20 @@ public class Jugador2D : MonoBehaviour
     [Min(0f)] public float enfriamientoDash = 0.5f;
     [SerializeField] private bool dashDesbloqueado = true;
 
+    [Header("Salto y Doble Salto")]
+    [SerializeField] private bool dobleSaltoDesbloqueado = false;
+    [SerializeField] private float fuerzaDobleSalto = 10f;
+    private bool puedeDobleSalto = false;
+    private bool estaEnSuelo; 
+
+    [Header("Escalada y Deslizamiento en Pared")]
+    [SerializeField] private bool escaladaDesbloqueada = false;
+    [SerializeField] private LayerMask capaParedes;
+    [SerializeField] private Transform comprobadorPared;
+    [SerializeField] private float velocidadDeslizamientoPared = 2f;
+    private bool estaEnPared = false;
+    private bool estaDeslizandoseEnPared = false;
+
     [Header("Combate")]
     public Collider2D zonaDefensa;
     public GameObject espadaVisual;
@@ -55,6 +72,12 @@ public class Jugador2D : MonoBehaviour
     [Min(0.5f)] public float radioImpactoDescarga = 2.4f;
     [Min(1)] public int danioDescarga = 2;
     [Min(0f)] public float fuerzaRetrocesoDescarga = 8f;
+
+    [Header("Salud y Estadísticas")]
+    [SerializeField] private int saludMaxima = 5;
+    private int saludActual;
+
+    public int SaludActual => saludActual;
 
     private Rigidbody2D rb;
     private SpriteRenderer sprite;
@@ -96,9 +119,81 @@ public class Jugador2D : MonoBehaviour
     public bool EstaEnDescargaPresion { get; private set; }
     public bool DescargaPresionDesbloqueada => TieneHabilidad(HabilidadExploracion2D.DescargaPresion);
 
-    ///public bool EstaEnDescargaPresion { get; private set; }
+    public void OnJump(InputAction.CallbackContext context)
+    {
+        if (context.performed)
+        {
+            estaEnSuelo = EstaEnElSuelo();
 
-    ///public bool DescargaPresionDesbloqueada => TieneHabilidad(HabilidadExploracion2D.DescargaPresion);
+            if (estaEnSuelo)
+            {
+                EjecutarSalto(fuerzaSalto);
+                puedeDobleSalto = true;
+            }
+            else if (estaDeslizandoseEnPared)
+            {
+                EjecutarSaltoDePared();
+            }
+            else if (dobleSaltoDesbloqueado && puedeDobleSalto)
+            {
+                EjecutarSalto(fuerzaDobleSalto);
+                puedeDobleSalto = false;
+            }
+        }
+    }
+
+      private void Start()
+    {
+        // Inicializa la salud al máximo al arrancar
+        saludActual = saludMaxima;
+    }
+
+    // Método que llama el altar al descansar
+  public void RestaurarSaludYResonanciaCompleta()
+{
+    saludActual = saludMaxima;
+
+    // Rellena la barra de resonancia (alma) al máximo usando un entero (int)
+    ResonanciaJugador2D resonancia = GetComponent<ResonanciaJugador2D>();
+    if (resonancia != null)
+    {
+        resonancia.GanarResonancia(999); // Cambiado de 999f a 999 (int)
+    }
+
+    Debug.Log("Salud y Resonancia restauradas al 100%.");
+}
+    private void EjecutarSalto(float fuerza)
+    {
+        if (rb != null)
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, fuerza);
+    }
+
+    private void ComprobarParedes()
+    {
+        if (!escaladaDesbloqueada) return;
+
+        Vector2 direccionPared = mirandoDerecha ? Vector2.right : Vector2.left;
+        estaEnPared = Physics2D.Raycast(transform.position, direccionPared, 0.6f, capaParedes);
+
+        if (estaEnPared && !EstaEnElSuelo() && rb.linearVelocity.y < 0f)
+        {
+            estaDeslizandoseEnPared = true;
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, -velocidadDeslizamientoPared);
+        }
+        else
+        {
+            estaDeslizandoseEnPared = false;
+        }
+    }
+
+    private void EjecutarSaltoDePared()
+    {
+        float direccionSaltoX = mirandoDerecha ? -8f : 8f;
+        rb.linearVelocity = new Vector2(direccionSaltoX, fuerzaSalto);
+        mirandoDerecha = !mirandoDerecha;
+        transform.localScale = new Vector3(-transform.localScale.x, transform.localScale.y, transform.localScale.z);
+        puedeDobleSalto = true;
+    }
 
     public bool TieneHabilidad(HabilidadExploracion2D habilidad)
     {
@@ -258,8 +353,7 @@ public class Jugador2D : MonoBehaviour
         {
             entradaMovimiento = Vector2.zero;
             EstaDefendiendose = false;
-
-        EstaEnDescargaPresion = false;
+            EstaEnDescargaPresion = false;
             InterfazJuego2D.MostrarIndicacionInteraccion(null);
             return;
         }
@@ -269,14 +363,14 @@ public class Jugador2D : MonoBehaviour
         {
             entradaMovimiento = Vector2.zero;
             EstaDefendiendose = false;
-
-        EstaEnDescargaPresion = false;
+            EstaEnDescargaPresion = false;
             return;
         }
 
         entradaMovimiento = movimiento.ReadValue<Vector2>();
         EstaDefendiendose = defensa != null && defensa.IsPressed();
         ActualizarIndicacionInteraccion();
+        ComprobarParedes();
 
         if (Mathf.Abs(entradaMovimiento.x) > 0.01f)
         {
@@ -286,10 +380,12 @@ public class Jugador2D : MonoBehaviour
             ActualizarLadoDeLaEspada();
         }
 
-        if (EstaEnElSuelo() && rb.linearVelocity.y <= 0f)
+        estaEnSuelo = EstaEnElSuelo();
+        if (estaEnSuelo && rb.linearVelocity.y <= 0f)
         {
             ultimoContactoSuelo = Time.time;
             puedeSaltarCoyote = true;
+            puedeDobleSalto = true; // Recarga el doble salto al tocar suelo
         }
 
         if (salto.WasPressedThisFrame())
@@ -298,7 +394,7 @@ public class Jugador2D : MonoBehaviour
         if (salto.WasReleasedThisFrame() && rb.linearVelocity.y > 0f)
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, rb.linearVelocity.y * corteSalto);
 
-        if (DescargaPresionDesbloqueada && !EstaEnElSuelo() && entradaMovimiento.y < -0.5f &&
+        if (DescargaPresionDesbloqueada && !estaEnSuelo && entradaMovimiento.y < -0.5f &&
             (dash.WasPressedThisFrame() || (ataque.WasPressedThisFrame() && defensa != null && defensa.IsPressed())))
         {
             IniciarDescargaPresion();
@@ -362,6 +458,9 @@ public class Jugador2D : MonoBehaviour
             return;
         }
 
+        if (estaDeslizandoseEnPared)
+            return; // Evita sobreescribir la velocidad si se está deslizando
+
         rb.gravityScale = gravedadOriginal;
 
         float velocidadObjetivo = entradaMovimiento.x * velocidad;
@@ -416,7 +515,6 @@ public class Jugador2D : MonoBehaviour
                 habilidades = gameObject.AddComponent<HabilidadesExploracion2D>();
         }
 
-        // Conserva el valor de dashDesbloqueado serializado en escenas anteriores.
         if (dashDesbloqueado)
             habilidades.Desbloquear(HabilidadExploracion2D.Dash);
     }
@@ -759,7 +857,6 @@ public class Jugador2D : MonoBehaviour
         entradaMovimiento = Vector2.zero;
         dashSolicitado = false;
         EstaDefendiendose = false;
-
         EstaEnDescargaPresion = false;
 
         if (activo)
@@ -807,7 +904,29 @@ public class Jugador2D : MonoBehaviour
 
         return masCercano;
     }
+    
+    private bool estaLento = false;
 
+public void AplicarEstadoLentitud(float factorReduccion, float duracion)
+{
+    if (!estaLento)
+    {
+        StartCoroutine(RutinaLentitud(factorReduccion, duracion));
+    }
+}
+
+private IEnumerator RutinaLentitud(float factor, float duracion)
+{
+    estaLento = true;
+    // Modifica temporalmente la velocidad en Jugador2D
+     velocidad *= factor; 
+    
+    yield return new WaitForSeconds(duracion);
+    
+    // Restaura la velocidad original
+    velocidad /= factor;
+    estaLento = false;
+}
     private void OnDrawGizmosSelected()
     {
         if (comprobadorSuelo != null)
@@ -831,4 +950,44 @@ public class Jugador2D : MonoBehaviour
         Vector3 centroAbajo = transform.position + Vector3.down * (alcance * 0.5f);
         Gizmos.DrawWireCube(centroAbajo, new Vector3(altura, alcance, 0f));
     }
+    [Header("Hechizos / Magia")]
+    [SerializeField] private GameObject prefabProyectilMagico;
+    [SerializeField] private int costeResonanciaHechizo = 33;
+
+    public void IntentarLanzarHechizo()
+{
+    ResonanciaJugador2D resonancia = GetComponent<ResonanciaJugador2D>();
+    
+    if (resonancia != null && resonancia.ResonanciaActual >= costeResonanciaHechizo)
+    {
+        if (prefabProyectilMagico != null)
+        {
+            Vector3 posicionSpawn = transform.position + (mirandoDerecha ? Vector3.right : Vector3.left) * 0.8f;
+            GameObject proyectil = Instantiate(prefabProyectilMagico, posicionSpawn, Quaternion.identity);
+            
+            if (proyectil.TryGetComponent<HechizoProyectil2D>(out var scriptHechizo))
+            {
+                scriptHechizo.Inicializar(mirandoDerecha);
+            }
+
+            // --- NUEVO: Notificar a los enemigos cercanos sobre el uso de magia ---
+            ReceptorMagiaEnemigo2D[] enemigosEnEscena = FindObjectsByType<ReceptorMagiaEnemigo2D>(FindObjectsSortMode.None);
+            foreach (var enemigo in enemigosEnEscena)
+            {
+                enemigo.NotificarMagiaDetectada(transform.position);
+            }
+        }
+    }
+    else
+    {
+        Debug.Log("Resonancia insuficiente para lanzar el hechizo.");
+    }
+}
+///Cuando Sira use su magia en los pasillos del Acueducto de la Niebla, 
+/// los enemigos que estén dentro del radio de detección dejarán de patrullar
+///  pasivamente.
+
+///Podrás programar que se abalancen sobre Sira de inmediato, 
+/// obligándote a usar el doble salto o las corrientes de viento para 
+/// esquivar sus embestidas rápidas.
 }
