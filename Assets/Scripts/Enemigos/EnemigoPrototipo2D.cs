@@ -1,6 +1,12 @@
 using UnityEngine;
 
-[RequireComponent(typeof(Rigidbody2D), typeof(Collider2D), typeof(SpriteRenderer))]
+[RequireComponent(typeof(MaquinaEstadosEnemigo2D))]
+[RequireComponent(typeof(Rigidbody2D))]
+[RequireComponent(typeof(Collider2D))]
+[RequireComponent(typeof(SpriteRenderer))]
+
+
+
 public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
 {
     public enum Estado
@@ -34,18 +40,23 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
     [SerializeField, Min(0.2f)] protected float vidaProyectil = 3f;
     [SerializeField] protected Transform puntoDisparo;
 
+    public MaquinaEstadosEnemigo2D FSM { get; private set; }
     protected Rigidbody2D rb;
     protected Jugador2D jugador;
     protected SpriteRenderer visual;
     protected Estado estado;
     protected Vector2 posicionInicial;
     protected float direccionMirada = 1f;
-    private float estadoTerminaEn;
+
     private float ataqueDisponibleDesde;
     private float invulnerableHasta;
     private int vidaActual;
     private Vector3 escalaInicial;
     private Color colorInicial;
+
+    private EstadoPatrullaPrototipo estadoPatrulla;
+    private EstadoDeteccionPrototipo estadoDeteccion;
+    private EstadoCicloAtaque2D estadoCombate;
 
     public Estado EstadoActual => estado;
     public int VidaActual => vidaActual;
@@ -54,92 +65,56 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
 
     protected virtual void Awake()
     {
+        FSM = GetComponent<MaquinaEstadosEnemigo2D>();
+        if (FSM == null) FSM = gameObject.AddComponent<MaquinaEstadosEnemigo2D>();
+
         rb = GetComponent<Rigidbody2D>();
         visual = GetComponent<SpriteRenderer>();
         posicionInicial = rb.position;
         escalaInicial = transform.localScale;
         colorInicial = visual.color;
         vidaActual = Mathf.Max(1, vidaMaxima);
-        estado = Estado.Patrullar;
+
+        estadoPatrulla = new EstadoPatrullaPrototipo(this);
+        estadoDeteccion = new EstadoDeteccionPrototipo(this);
+        estadoCombate = new EstadoCicloAtaque2D(
+            FSM,
+            rb,
+            anticipacionAtaque,
+            duracionAtaque,
+            recuperacionAtaque,
+            alIniciarAnticipacion: () => SincronizarEstadoVisual(Estado.AnticipandoAtaque),
+            alEjecutarGolpe: () =>
+            {
+                SincronizarEstadoVisual(Estado.Atacando);
+                EjecutarAtaque();
+            },
+            alActualizarAtaque: () =>
+            {
+                if (estadoCombate.SubFaseActual == 2 && estado != Estado.Recuperandose)
+                    SincronizarEstadoVisual(Estado.Recuperandose);
+            },
+            alTerminarCiclo: () => SincronizarEstadoVisual(Estado.Detectando),
+            estadoSiguiente: estadoDeteccion
+        );
+    }
+
+    protected virtual void Start()
+    {
+        SincronizarEstadoVisual(Estado.Patrullar);
+        FSM.Inicializar(estadoPatrulla);
     }
 
     protected virtual void Update()
     {
-        if (estado == Estado.Muerto)
-            return;
-
-        if (estado == Estado.RecibiendoDanio)
-        {
-            if (Time.time < estadoTerminaEn)
-                return;
-            CambiarEstado(jugador != null && jugador.isActiveAndEnabled
-                ? Estado.Detectando
-                : Estado.Patrullar);
-        }
+        if (estado == Estado.Muerto) return;
 
         if (jugador == null || !jugador.isActiveAndEnabled)
             jugador = FindFirstObjectByType<Jugador2D>();
-
-        if (estado == Estado.AnticipandoAtaque)
-        {
-            if (Time.time >= estadoTerminaEn)
-            {
-                EjecutarAtaque();
-                CambiarEstado(Estado.Atacando, duracionAtaque);
-            }
-            return;
-        }
-
-        if (estado == Estado.Atacando)
-        {
-            if (Time.time >= estadoTerminaEn)
-                CambiarEstado(Estado.Recuperandose, recuperacionAtaque);
-            return;
-        }
-
-        if (estado == Estado.Recuperandose)
-        {
-            if (Time.time < estadoTerminaEn)
-                return;
-            CambiarEstado(Estado.Detectando);
-        }
-
-        if (jugador == null || !jugador.isActiveAndEnabled)
-        {
-            CambiarEstado(Estado.Patrullar);
-            return;
-        }
-
-        Vector2 diferencia = (Vector2)jugador.transform.position - rb.position;
-        float distancia = diferencia.magnitude;
-        if (distancia > rangoDeteccion)
-        {
-            CambiarEstado(Estado.Patrullar);
-            return;
-        }
-
-        if (Mathf.Abs(diferencia.x) > 0.05f)
-            direccionMirada = Mathf.Sign(diferencia.x);
-
-        if (distancia <= rangoAtaque && Time.time >= ataqueDisponibleDesde)
-        {
-            ataqueDisponibleDesde = Time.time + Mathf.Max(
-                anticipacionAtaque + duracionAtaque + recuperacionAtaque,
-                tiempoEntreAtaques
-            );
-            CambiarEstado(Estado.AnticipandoAtaque, anticipacionAtaque);
-        }
-        else
-        {
-            CambiarEstado(Estado.Detectando);
-        }
     }
 
     protected virtual void FixedUpdate()
     {
-        if (estado != Estado.Muerto && estado != Estado.RecibiendoDanio)
-            ActualizarMovimiento();
-
         if (visual != null)
             visual.flipX = direccionMirada < 0f;
     }
@@ -147,8 +122,15 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
     protected abstract void ActualizarMovimiento();
     protected abstract void EjecutarAtaque();
 
-    protected virtual void AlCambiarEstado(Estado estadoAnterior, Estado estadoNuevo)
+    protected virtual void AlCambiarEstado(Estado estadoAnterior, Estado estadoNuevo) { }
+
+    public void AlDetectarMagiaCercana()
     {
+        if (estado == Estado.Patrullar && jugador != null)
+        {
+            direccionMirada = Mathf.Sign(jugador.transform.position.x - transform.position.x);
+            FSM.CambiarEstado(estadoDeteccion);
+        }
     }
 
     public virtual bool RecibirDanio(int cantidad, Vector2 posicionAtacante, float retroceso)
@@ -163,10 +145,8 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
 
         if (vidaActual == 0)
         {
-            CambiarEstado(Estado.Muerto);
-            rb.linearVelocity = Vector2.zero;
-            foreach (Collider2D colisionador in GetComponents<Collider2D>())
-                colisionador.enabled = false;
+            SincronizarEstadoVisual(Estado.Muerto);
+            FSM.CambiarEstado(new EstadoMuerteEnemigo2D(gameObject, rb, GetComponent<Collider2D>(), 0.35f));
             return true;
         }
 
@@ -177,7 +157,8 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
         if (fuerza > 0f)
             rb.linearVelocity = new Vector2(direccion * fuerza, Mathf.Max(1f, fuerza * 0.35f));
 
-        CambiarEstado(Estado.RecibiendoDanio, tiempoAturdido);
+        SincronizarEstadoVisual(Estado.RecibiendoDanio);
+        FSM.CambiarEstado(new EstadoAturdido2D(FSM, rb, estadoDeteccion, tiempoAturdido));
         return true;
     }
 
@@ -197,13 +178,8 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
             return;
 
         VidaJugador2D vida = jugador.GetComponent<VidaJugador2D>();
-        if (vida == null)
-        {
-            Debug.LogError("El jugador necesita VidaJugador2D para recibir daño.", jugador);
-            return;
-        }
-
-        vida.RecibirDanio(dano, transform.position);
+        if (vida != null)
+            vida.RecibirDanio(dano, transform.position);
     }
 
     protected void LanzarProyectil(
@@ -239,22 +215,19 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
             direccion.normalized,
             velocidadProyectil,
             dano,
-            alcanceMaximo > 0f
-                ? alcanceMaximo / velocidadProyectil
-                : vidaProyectil,
+            alcanceMaximo > 0f ? alcanceMaximo / velocidadProyectil : vidaProyectil,
             transform,
             soloHorizontal
         );
     }
 
-    private void CambiarEstado(Estado nuevoEstado, float duracion = 0f)
+    private void SincronizarEstadoVisual(Estado nuevoEstado)
     {
         if (estado == nuevoEstado)
             return;
 
         Estado anterior = estado;
         estado = nuevoEstado;
-        estadoTerminaEn = Time.time + Mathf.Max(0f, duracion);
         ActualizarVisualEstado();
         AlCambiarEstado(anterior, nuevoEstado);
     }
@@ -292,5 +265,62 @@ public abstract class EnemigoPrototipo2D : MonoBehaviour, IDamageable2D
         Gizmos.DrawWireSphere(transform.position, rangoDeteccion);
         Gizmos.color = new Color(1f, 0.35f, 0.2f, 0.9f);
         Gizmos.DrawWireSphere(transform.position, rangoAtaque);
+    }
+
+    private class EstadoPatrullaPrototipo : IEstadoEnemigo2D
+    {
+        private readonly EnemigoPrototipo2D e;
+        public EstadoPatrullaPrototipo(EnemigoPrototipo2D e) => this.e = e;
+
+        public void Entrar() => e.SincronizarEstadoVisual(Estado.Patrullar);
+        public void Actualizar()
+        {
+            if (e.jugador != null && e.jugador.isActiveAndEnabled)
+            {
+                float dist = Vector2.Distance(e.rb.position, e.jugador.transform.position);
+                if (dist <= e.rangoDeteccion)
+                    e.FSM.CambiarEstado(e.estadoDeteccion);
+            }
+        }
+        public void ActualizarFisicas() => e.ActualizarMovimiento();
+        public void Salir() { }
+    }
+
+    private class EstadoDeteccionPrototipo : IEstadoEnemigo2D
+    {
+        private readonly EnemigoPrototipo2D e;
+        public EstadoDeteccionPrototipo(EnemigoPrototipo2D e) => this.e = e;
+
+        public void Entrar() => e.SincronizarEstadoVisual(Estado.Detectando);
+        public void Actualizar()
+        {
+            if (e.jugador == null || !e.jugador.isActiveAndEnabled)
+            {
+                e.FSM.CambiarEstado(e.estadoPatrulla);
+                return;
+            }
+
+            Vector2 diff = (Vector2)e.jugador.transform.position - e.rb.position;
+            float dist = diff.magnitude;
+            if (dist > e.rangoDeteccion)
+            {
+                e.FSM.CambiarEstado(e.estadoPatrulla);
+                return;
+            }
+
+            if (Mathf.Abs(diff.x) > 0.05f)
+                e.direccionMirada = Mathf.Sign(diff.x);
+
+            if (dist <= e.rangoAtaque && Time.time >= e.ataqueDisponibleDesde)
+            {
+                e.ataqueDisponibleDesde = Time.time + Mathf.Max(
+                    e.anticipacionAtaque + e.duracionAtaque + e.recuperacionAtaque,
+                    e.tiempoEntreAtaques
+                );
+                e.FSM.CambiarEstado(e.estadoCombate);
+            }
+        }
+        public void ActualizarFisicas() => e.ActualizarMovimiento();
+        public void Salir() { }
     }
 }

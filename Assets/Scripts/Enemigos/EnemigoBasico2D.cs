@@ -1,6 +1,6 @@
 using UnityEngine;
 
-[RequireComponent(typeof(Rigidbody2D), typeof(Collider2D))]
+[RequireComponent(typeof(MaquinaEstadosEnemigo2D), typeof(Rigidbody2D), typeof(Collider2D))]
 public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
 {
     public enum Estado
@@ -34,6 +34,7 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
     [SerializeField] private SpriteRenderer sprite;
     [SerializeField] private Animator animator;
 
+    public MaquinaEstadosEnemigo2D FSM { get; private set; }
     private Rigidbody2D rb;
     private Jugador2D jugador;
     private FeedbackImpacto2D feedbackImpacto;
@@ -43,10 +44,13 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
     private float limiteDerechoX;
     private float direccionPatrulla = 1f;
     private float proximoAtaque;
-    private float aturdidoHasta;
     private float puedeRecibirGolpeDesde;
     private int vidaActual;
     private bool mirandoDerecha = true;
+
+    private EstadoPatrullaBasico estadoPatrulla;
+    private EstadoPerseguirBasico estadoPerseguir;
+    private EstadoAtacarBasico estadoAtacar;
 
     public Estado EstadoActual => estado;
     public int VidaActual => vidaActual;
@@ -54,19 +58,16 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
 
     private void Awake()
     {
+        FSM = GetComponent<MaquinaEstadosEnemigo2D>();
+        if (FSM == null) FSM = gameObject.AddComponent<MaquinaEstadosEnemigo2D>();
+
         rb = GetComponent<Rigidbody2D>();
-        if (sprite == null)
-            sprite = GetComponent<SpriteRenderer>();
-        if (animator == null)
-            animator = GetComponent<Animator>();
+        if (sprite == null) sprite = GetComponent<SpriteRenderer>();
+        if (animator == null) animator = GetComponent<Animator>();
 
         posicionInicial = rb.position;
-        limiteIzquierdoX = limiteIzquierdo != null
-            ? limiteIzquierdo.position.x
-            : posicionInicial.x - distanciaPatrulla;
-        limiteDerechoX = limiteDerecho != null
-            ? limiteDerecho.position.x
-            : posicionInicial.x + distanciaPatrulla;
+        limiteIzquierdoX = limiteIzquierdo != null ? limiteIzquierdo.position.x : posicionInicial.x - distanciaPatrulla;
+        limiteDerechoX = limiteDerecho != null ? limiteDerecho.position.x : posicionInicial.x + distanciaPatrulla;
 
         if (limiteIzquierdoX > limiteDerechoX)
         {
@@ -76,85 +77,62 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
         }
 
         vidaActual = Mathf.Max(1, vidaMaxima);
-        estado = Estado.Patrullar;
+
+        estadoPatrulla = new EstadoPatrullaBasico(this);
+        estadoPerseguir = new EstadoPerseguirBasico(this);
+        estadoAtacar = new EstadoAtacarBasico(this);
+    }
+
+    private void Start()
+    {
+        CambiarEstado(Estado.Patrullar);
+        FSM.Inicializar(estadoPatrulla);
     }
 
     private void Update()
     {
-        if (estado == Estado.Muerto)
-            return;
-
-        if (Time.time < aturdidoHasta)
-        {
-            CambiarEstado(Estado.Aturdido);
-            return;
-        }
-
-        if (estado == Estado.Aturdido)
-            CambiarEstado(Estado.Patrullar);
+        if (estado == Estado.Muerto) return;
 
         if (jugador == null || !jugador.isActiveAndEnabled)
             jugador = FindFirstObjectByType<Jugador2D>();
-
-        if (jugador == null || !jugador.isActiveAndEnabled || !JugadorADistancia(rangoDeteccion))
-        {
-            CambiarEstado(Estado.Patrullar);
-            return;
-        }
-
-        MirarHacia(jugador.transform.position.x - transform.position.x);
-        CambiarEstado(JugadorADistancia(rangoAtaque) ? Estado.Atacar : Estado.Perseguir);
-
-        if (estado == Estado.Atacar && Time.time >= proximoAtaque)
-            AtacarJugador();
     }
 
-    private void FixedUpdate()
+    public void AlDetectarMagiaCercana()
     {
-        if (estado == Estado.Muerto || estado == Estado.Aturdido)
-            return;
-
-        if (estado == Estado.Patrullar)
-            ActualizarDireccionPatrulla();
-        else if (estado == Estado.Perseguir && jugador != null)
-            direccionPatrulla = Mathf.Sign(jugador.transform.position.x - transform.position.x);
-        else if (estado == Estado.Atacar)
-            direccionPatrulla = 0f;
-
-        rb.linearVelocity = new Vector2(direccionPatrulla * velocidad, rb.linearVelocity.y);
-        if (Mathf.Abs(direccionPatrulla) > 0.01f)
-            MirarHacia(direccionPatrulla);
-
-        ActualizarAnimacion();
+        if (estado == Estado.Patrullar && jugador != null && jugador.isActiveAndEnabled)
+        {
+            MirarHacia(jugador.transform.position.x - transform.position.x);
+            FSM.CambiarEstado(estadoPerseguir);
+        }
     }
 
     public bool RecibirDanio(int cantidad, Vector2 posicionAtacante, float retroceso)
     {
-        if (estado == Estado.Muerto || cantidad <= 0)
-            return false;
-        if (Time.time < puedeRecibirGolpeDesde)
+        if (estado == Estado.Muerto || cantidad <= 0 || Time.time < puedeRecibirGolpeDesde)
             return false;
 
         vidaActual = Mathf.Max(0, vidaActual - cantidad);
         puedeRecibirGolpeDesde = Time.time + Mathf.Max(0f, tiempoInvulnerableTrasGolpe);
         ObtenerFeedbackImpacto()?.MostrarImpacto();
+
         if (vidaActual == 0)
         {
-            Morir();
+            CambiarEstado(Estado.Muerto);
+            rb.simulated = false;
+            FSM.CambiarEstado(new EstadoMuerteEnemigo2D(gameObject, rb, GetComponent<Collider2D>(), 0.25f));
             return true;
         }
 
-        aturdidoHasta = Time.time + tiempoAturdido;
         CambiarEstado(Estado.Aturdido);
         AplicarRetroceso(posicionAtacante, retroceso);
         ActivarTrigger("Hurt", "stun", "damage");
+        FSM.CambiarEstado(new EstadoAturdido2D(FSM, rb, estadoPatrulla, tiempoAturdido));
         return true;
     }
 
     private void AplicarRetroceso(Vector2 posicionAtacante, float fuerzaRetroceso)
     {
-        if (rb == null || fuerzaRetroceso <= 0f)
-            return;
+        if (rb == null || fuerzaRetroceso <= 0f) return;
 
         float direccion = Mathf.Sign(rb.position.x - posicionAtacante.x);
         if (Mathf.Approximately(direccion, 0f))
@@ -166,27 +144,17 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
 
     private FeedbackImpacto2D ObtenerFeedbackImpacto()
     {
-        if (feedbackImpacto == null)
-            feedbackImpacto = GetComponent<FeedbackImpacto2D>();
+        if (feedbackImpacto == null) feedbackImpacto = GetComponent<FeedbackImpacto2D>();
         if (feedbackImpacto == null && GetComponentInChildren<SpriteRenderer>(true) != null)
             feedbackImpacto = gameObject.AddComponent<FeedbackImpacto2D>();
-
         return feedbackImpacto;
-    }
-
-    private void ActualizarDireccionPatrulla()
-    {
-        if (rb.position.x <= limiteIzquierdoX)
-            direccionPatrulla = 1f;
-        else if (rb.position.x >= limiteDerechoX)
-            direccionPatrulla = -1f;
     }
 
     private bool JugadorADistancia(float distanciaMaxima)
     {
+        if (jugador == null || !jugador.isActiveAndEnabled) return false;
         Vector2 diferencia = (Vector2)jugador.transform.position - rb.position;
-        return Mathf.Abs(diferencia.x) <= distanciaMaxima &&
-               Mathf.Abs(diferencia.y) <= toleranciaAltura;
+        return Mathf.Abs(diferencia.x) <= distanciaMaxima && Mathf.Abs(diferencia.y) <= toleranciaAltura;
     }
 
     private void AtacarJugador()
@@ -195,23 +163,15 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
         ActivarTrigger("Attack", "attack");
 
         VidaJugador2D vida = jugador.GetComponent<VidaJugador2D>();
-        if (vida == null)
-        {
-            Debug.LogError("El jugador necesita un componente VidaJugador2D para recibir daño.", jugador);
-            return;
-        }
-
-        vida.RecibirDanio(dano, transform.position);
+        if (vida != null)
+            vida.RecibirDanio(dano, transform.position);
     }
 
     private void MirarHacia(float direccion)
     {
-        if (Mathf.Abs(direccion) < 0.01f)
-            return;
-
+        if (Mathf.Abs(direccion) < 0.01f) return;
         mirandoDerecha = direccion > 0f;
-        if (sprite != null)
-            sprite.flipX = !mirandoDerecha;
+        if (sprite != null) sprite.flipX = !mirandoDerecha;
     }
 
     private void CambiarEstado(Estado nuevoEstado)
@@ -222,8 +182,7 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
 
     private void ActualizarAnimacion()
     {
-        if (animator == null)
-            return;
+        if (animator == null) return;
 
         bool seMueve = estado == Estado.Patrullar || estado == Estado.Perseguir;
         EstablecerBool("move", seMueve && Mathf.Abs(direccionPatrulla) > 0.01f);
@@ -243,14 +202,10 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
 
     private void ActivarTrigger(params string[] nombres)
     {
-        if (animator == null)
-            return;
-
+        if (animator == null) return;
         foreach (string nombre in nombres)
         {
-            if (!TieneParametro(nombre, AnimatorControllerParameterType.Trigger))
-                continue;
-
+            if (!TieneParametro(nombre, AnimatorControllerParameterType.Trigger)) continue;
             animator.SetTrigger(nombre);
             return;
         }
@@ -263,38 +218,82 @@ public class EnemigoBasico2D : MonoBehaviour, IDamageable2D
             if (parametro.name == nombre && parametro.type == tipo)
                 return true;
         }
-
         return false;
     }
 
-    private void Morir()
+    private class EstadoPatrullaBasico : IEstadoEnemigo2D
     {
-        CambiarEstado(Estado.Muerto);
-        rb.linearVelocity = Vector2.zero;
-        rb.simulated = false;
-        foreach (Collider2D colisionador in GetComponentsInChildren<Collider2D>())
-            colisionador.enabled = false;
-        Destroy(gameObject, 0.2f);
+        private readonly EnemigoBasico2D e;
+        public EstadoPatrullaBasico(EnemigoBasico2D e) => this.e = e;
+
+        public void Entrar() => e.CambiarEstado(Estado.Patrullar);
+        public void Actualizar()
+        {
+            if (e.JugadorADistancia(e.rangoDeteccion))
+                e.FSM.CambiarEstado(e.estadoPerseguir);
+        }
+        public void ActualizarFisicas()
+        {
+            if (e.rb.position.x <= e.limiteIzquierdoX) e.direccionPatrulla = 1f;
+            else if (e.rb.position.x >= e.limiteDerechoX) e.direccionPatrulla = -1f;
+
+            e.rb.linearVelocity = new Vector2(e.direccionPatrulla * e.velocidad, e.rb.linearVelocity.y);
+            e.MirarHacia(e.direccionPatrulla);
+            e.ActualizarAnimacion();
+        }
+        public void Salir() { }
     }
 
-    private void OnDrawGizmosSelected()
+    private class EstadoPerseguirBasico : IEstadoEnemigo2D
     {
-        float izquierda = limiteIzquierdo != null
-            ? limiteIzquierdo.position.x
-            : transform.position.x - distanciaPatrulla;
-        float derecha = limiteDerecho != null
-            ? limiteDerecho.position.x
-            : transform.position.x + distanciaPatrulla;
+        private readonly EnemigoBasico2D e;
+        public EstadoPerseguirBasico(EnemigoBasico2D e) => this.e = e;
 
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawLine(new Vector3(izquierda, transform.position.y, 0f),
-            new Vector3(derecha, transform.position.y, 0f));
-        Gizmos.DrawWireSphere(new Vector3(izquierda, transform.position.y, 0f), 0.12f);
-        Gizmos.DrawWireSphere(new Vector3(derecha, transform.position.y, 0f), 0.12f);
+        public void Entrar() => e.CambiarEstado(Estado.Perseguir);
+        public void Actualizar()
+        {
+            if (!e.JugadorADistancia(e.rangoDeteccion))
+            {
+                e.FSM.CambiarEstado(e.estadoPatrulla);
+                return;
+            }
+            if (e.JugadorADistancia(e.rangoAtaque))
+                e.FSM.CambiarEstado(e.estadoAtacar);
+        }
+        public void ActualizarFisicas()
+        {
+            if (e.jugador == null) return;
+            e.direccionPatrulla = Mathf.Sign(e.jugador.transform.position.x - e.transform.position.x);
+            e.rb.linearVelocity = new Vector2(e.direccionPatrulla * e.velocidad, e.rb.linearVelocity.y);
+            e.MirarHacia(e.direccionPatrulla);
+            e.ActualizarAnimacion();
+        }
+        public void Salir() { }
+    }
 
-        Gizmos.color = Color.cyan;
-        Gizmos.DrawWireSphere(transform.position, rangoDeteccion);
-        Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, rangoAtaque);
+    private class EstadoAtacarBasico : IEstadoEnemigo2D
+    {
+        private readonly EnemigoBasico2D e;
+        public EstadoAtacarBasico(EnemigoBasico2D e) => this.e = e;
+
+        public void Entrar()
+        {
+            e.direccionPatrulla = 0f;
+            e.rb.linearVelocity = new Vector2(0f, e.rb.linearVelocity.y);
+            e.CambiarEstado(Estado.Atacar);
+        }
+        public void Actualizar()
+        {
+            if (!e.JugadorADistancia(e.rangoAtaque))
+            {
+                e.FSM.CambiarEstado(e.JugadorADistancia(e.rangoDeteccion) ? e.estadoPerseguir : e.estadoPatrulla);
+                return;
+            }
+            e.MirarHacia(e.jugador.transform.position.x - e.transform.position.x);
+            if (Time.time >= e.proximoAtaque)
+                e.AtacarJugador();
+        }
+        public void ActualizarFisicas() => e.ActualizarAnimacion();
+        public void Salir() { }
     }
 }

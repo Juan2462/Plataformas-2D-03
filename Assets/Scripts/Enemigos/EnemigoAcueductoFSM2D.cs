@@ -17,13 +17,13 @@ public class EnemigoAcueductoFSM2D : MonoBehaviour, IDamageable2D
     public Transform Jugador { get; private set; }
     public bool MirandoDerecha { get; private set; } = true;
 
-    // Instancias de los estados reutilizables
     public EstadoPatrulla2D EstadoPatrulla { get; private set; }
     public EstadoPersecucion2D EstadoPersecucion { get; private set; }
     public EstadoAtaque2D EstadoAtaque { get; private set; }
     public EstadoAlertaMagia2D EstadoAlertaMagia { get; private set; }
 
     private int saludActual;
+    private bool muerto;
 
     private void Awake()
     {
@@ -35,7 +35,6 @@ public class EnemigoAcueductoFSM2D : MonoBehaviour, IDamageable2D
         if (objJugador != null)
             Jugador = objJugador.transform;
 
-        // Creamos los estados pasándoles referencia a este controlador
         EstadoPatrulla = new EstadoPatrulla2D(this, velocidadPatrulla, sensorBorde, capaSuelo);
         EstadoPersecucion = new EstadoPersecucion2D(this, velocidadPersecucion, rangoDeteccion, rangoAtaque);
         EstadoAtaque = new EstadoAtaque2D(this, rangoAtaque);
@@ -63,27 +62,33 @@ public class EnemigoAcueductoFSM2D : MonoBehaviour, IDamageable2D
 
     public bool JugadorEnRangoDeteccion() => DistanciaAlJugador() <= rangoDeteccion;
 
-    // Llamado cuando Sira lanza un hechizo cerca
     public void AlDetectarMagiaCercana()
     {
-        if (FSM.EstadoActual != EstadoAtaque)
+        if (!muerto && FSM.EstadoActual != EstadoAtaque)
             FSM.CambiarEstado(EstadoAlertaMagia);
     }
 
     public bool RecibirDanio(int cantidad, Vector2 origenAtaque, float fuerzaRetroceso)
     {
+        if (muerto || cantidad <= 0) return false;
+
         saludActual -= cantidad;
         Vector2 dirRetroceso = ((Vector2)transform.position - origenAtaque).normalized;
         RB.linearVelocity = new Vector2(dirRetroceso.x * fuerzaRetroceso, RB.linearVelocity.y);
 
         if (saludActual <= 0)
-            Destroy(gameObject);
+        {
+            muerto = true;
+            FSM.CambiarEstado(new EstadoMuerteEnemigo2D(gameObject, RB, GetComponent<Collider2D>(), 0.35f));
+        }
+        else
+        {
+            FSM.CambiarEstado(new EstadoAturdido2D(FSM, RB, EstadoPersecucion, 0.22f));
+        }
 
         return true;
     }
 }
-
-// ================= ESTADOS CONCRETOS =================
 
 public class EstadoPatrulla2D : IEstadoEnemigo2D
 {
@@ -160,9 +165,12 @@ public class EstadoPersecucion2D : IEstadoEnemigo2D
             return;
         }
 
-        float diffX = enemigo.Jugador.position.x - enemigo.transform.position.x;
-        if ((diffX > 0.1f && !enemigo.MirandoDerecha) || (diffX < -0.1f && enemigo.MirandoDerecha))
-            enemigo.Girar();
+        if (enemigo.Jugador != null)
+        {
+            float diffX = enemigo.Jugador.position.x - enemigo.transform.position.x;
+            if ((diffX > 0.1f && !enemigo.MirandoDerecha) || (diffX < -0.1f && enemigo.MirandoDerecha))
+                enemigo.Girar();
+        }
     }
 
     public void ActualizarFisicas()
@@ -189,8 +197,7 @@ public class EstadoAtaque2D : IEstadoEnemigo2D
     public void Entrar()
     {
         enemigo.RB.linearVelocity = new Vector2(0f, enemigo.RB.linearVelocity.y);
-        tiempoFinAtaque = Time.time + 0.6f; // Duración del golpe/recuperación
-        // Aquí disparas el trigger de animación de ataque y el hitbox
+        tiempoFinAtaque = Time.time + 0.6f;
     }
 
     public void Actualizar()
@@ -198,7 +205,7 @@ public class EstadoAtaque2D : IEstadoEnemigo2D
         if (Time.time >= tiempoFinAtaque)
         {
             if (enemigo.DistanciaAlJugador() <= rangoAtaque)
-                Entrar(); // Vuelve a atacar si sigue pegado
+                Entrar();
             else
                 enemigo.FSM.CambiarEstado(enemigo.EstadoPersecucion);
         }
@@ -220,7 +227,6 @@ public class EstadoAlertaMagia2D : IEstadoEnemigo2D
 
     public void Entrar()
     {
-        // Se frena un instante al detectar el hechizo y mira hacia Sira
         enemigo.RB.linearVelocity = new Vector2(0f, enemigo.RB.linearVelocity.y);
         tiempoReaccion = Time.time + 0.25f;
 
@@ -235,24 +241,9 @@ public class EstadoAlertaMagia2D : IEstadoEnemigo2D
     public void Actualizar()
     {
         if (Time.time >= tiempoReaccion)
-        {
-            // Tras detectar la magia, pasa directamente a persecución agresiva
             enemigo.FSM.CambiarEstado(enemigo.EstadoPersecucion);
-        }
     }
 
     public void ActualizarFisicas() { }
     public void Salir() { }
 }
-
-///Aquí tienes un controlador completo que usa la FSM para alternar 
-/// entre Patrullar, Perseguir, Atacar y Reaccionar a Magia
-///Haciendo que todos tus enemigos (guardias de válvulas, 
-/// centinelas de campanas, enemigos del acueducto) hereden de esta clase base,
-///  todos soportarán automáticamente:
-
-/// Detección de hechizos de Sira.
-
-///Efectos alterados (como la lentitud de RutinaLentitud).
-
-///  Retroceso e interfaz IDamageable2D.
